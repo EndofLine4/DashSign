@@ -115,6 +115,12 @@ let waitingForNextObstacle = false;
 let pendingObstacleIndex = null; // which obstacle type is about to appear
 let lanePromptLocked = false;
 
+// --- Gesture stability tracking ---
+// Require gesture to match for N consecutive frames before accepting (reduces jitter and lag)
+let lastDetectedGesture = null;
+let gestureConfidenceCount = 0;
+const GESTURE_CONFIDENCE_THRESHOLD = 2;  // frames needed to confirm a gesture
+
 // --- Obstacle definitions ---
 // Each obstacle type defines its appearance, mechanic type,
 // the correct answer, and which sign images to show.
@@ -508,10 +514,15 @@ function speakPrompt(text, forcePlay) {
 }
 
 function getCurrentPopupSpeechText() {
-  const promptText = gameMode === 'choice'
+  const choiceVisible = document.getElementById('choiceMode').style.display === 'block';
+  const signItVisible = document.getElementById('signItMode').style.display === 'block';
+
+  const useChoiceText = choiceVisible || (!signItVisible && gameMode === 'choice');
+
+  const promptText = useChoiceText
     ? document.getElementById('choicePrompt').textContent
     : document.getElementById('signItPrompt').textContent;
-  const resultText = gameMode === 'choice'
+  const resultText = useChoiceText
     ? document.getElementById('choiceFeedback').textContent
     : document.getElementById('signResult').textContent;
   return [promptText, resultText].filter(Boolean).join(' ');
@@ -670,9 +681,11 @@ function checkGestureIfNeeded() {
   if (!isStuck || !currentLandmarks) return;
 
   if (gameMode === 'startSign') {
-    const matchedStart = recognizeGesture('play', currentLandmarks);
+    const matchedStart = confirmGesture('play', currentLandmarks);
     if (matchedStart) {
       setSignResult('Great signing!', true);
+      lastDetectedGesture = null;
+      gestureConfidenceCount = 0;
       setTimeout(function() {
         isStuck = false;
         gameMode = null;
@@ -689,18 +702,25 @@ function checkGestureIfNeeded() {
   if (gameMode === 'lanePrompt') {
     if (lanePromptLocked) return;
 
-    if (recognizeGesture('left', currentLandmarks)) {
+    const matchedLeft = confirmGesture('left', currentLandmarks);
+    const matchedRight = confirmGesture('right', currentLandmarks);
+
+    if (matchedLeft) {
       lanePromptLocked = true;
       car.x = Math.max(50, car.x - 95);
       setSignResult('Dodging LEFT!', true);
+      lastDetectedGesture = null;
+      gestureConfidenceCount = 0;
       setTimeout(finishLanePrompt, 500);
       return;
     }
 
-    if (recognizeGesture('right', currentLandmarks)) {
+    if (matchedRight) {
       lanePromptLocked = true;
       car.x = Math.min(430, car.x + 95);
       setSignResult('Dodging RIGHT!', true);
+      lastDetectedGesture = null;
+      gestureConfidenceCount = 0;
       setTimeout(finishLanePrompt, 500);
       return;
     }
@@ -710,9 +730,11 @@ function checkGestureIfNeeded() {
   }
 
   if (gameMode === 'tunnelEnter') {
-    const matchedIn = recognizeGesture('in', currentLandmarks);
+    const matchedIn = confirmGesture('in', currentLandmarks);
     if (matchedIn) {
       setSignResult('Great signing!', true);
+      lastDetectedGesture = null;
+      gestureConfidenceCount = 0;
       setTimeout(function() {
         resolveObstacle(true);
       }, 800);
@@ -723,9 +745,11 @@ function checkGestureIfNeeded() {
   }
 
   if (gameMode === 'tunnelExit') {
-    const matchedOut = recognizeGesture('out', currentLandmarks);
+    const matchedOut = confirmGesture('out', currentLandmarks);
     if (matchedOut) {
       setSignResult('Great signing!', true);
+      lastDetectedGesture = null;
+      gestureConfidenceCount = 0;
       setTimeout(function() {
         resolveObstacle(true);
       }, 800);
@@ -758,10 +782,12 @@ function checkGestureIfNeeded() {
   if (gameMode !== 'signIt') return;
 
   const type = OBSTACLE_TYPES[activeObstacle.typeIndex];
-  const matched = recognizeGesture(type.gesture, currentLandmarks);
+  const matched = confirmGesture(type.gesture, currentLandmarks);
 
   if (matched) {
     setSignResult('Great signing!', true);
+    lastDetectedGesture = null;
+    gestureConfidenceCount = 0;
     // Small delay so player sees the success message before popup closes
     setTimeout(function() {
       resolveObstacle(true);
@@ -785,6 +811,29 @@ function recognizeGesture(gestureName, landmarks) {
   if (gestureName === 'more') return gestureMore(landmarks);
   if (gestureName === 'no')   return gestureNo(landmarks);
   return false;
+}
+
+// Confirms a gesture match after N consecutive frames to reduce noise and lag
+function confirmGesture(gestureName, landmarks) {
+  const matched = recognizeGesture(gestureName, landmarks);
+  
+  if (matched) {
+    if (lastDetectedGesture === gestureName) {
+      gestureConfidenceCount++;
+      return gestureConfidenceCount >= GESTURE_CONFIDENCE_THRESHOLD;
+    } else {
+      lastDetectedGesture = gestureName;
+      gestureConfidenceCount = 1;
+      return false; // need more frames
+    }
+  } else {
+    // Reset if gesture no longer matches
+    if (lastDetectedGesture === gestureName) {
+      lastDetectedGesture = null;
+      gestureConfidenceCount = 0;
+    }
+    return false;
+  }
 }
 
 function gesturePlay(landmarks) {
@@ -854,15 +903,22 @@ function gestureIn(landmarks) {
   return indexExtended && othersCurled;
 }
 
-// OUT: open hand spread (demo approximation for moving out)
+// OUT: open hand (most fingers extended, loose checks for webcam variation)
 function gestureOut(landmarks) {
   const tips = [8, 12, 16, 20];
   const bases = [6, 10, 14, 18];
-  const allExtended = tips.every(function(tip, i) {
-    return landmarks[tip].y < landmarks[bases[i]].y;
-  });
-  const thumbOpen = Math.abs(landmarks[4].x - landmarks[5].x) > 0.1;
-  return allExtended && thumbOpen;
+
+  // Most fingers extended (at least 3 of 4) — natural hand pose allows some curl.
+  const extendedCount = tips.reduce(function(count, tip, i) {
+    return count + (landmarks[tip].y < landmarks[bases[i]].y ? 1 : 0);
+  }, 0);
+
+  // Thumb roughly away from index — very loose to accept different hand angles.
+  const thumbSeparation = Math.abs(landmarks[4].x - landmarks[5].x) + 
+                         Math.abs(landmarks[4].y - landmarks[5].y);
+  const thumbAway = thumbSeparation > 0.08;
+
+  return extendedCount >= 3 && thumbAway;
 }
 
 function gestureLeft(landmarks) {
