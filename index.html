@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>DashSign</title>
+  <style>
+    :root {
+      --blue-900: #0b0f1a;
+      --blue-800: #1b2a41;
+      --blue-500: #00b4d8;
+      --blue-300: #90e0ef;
+      --blue-100: #cae9ff;
+    }
+
+    body {
+      margin: 0;
+      background: radial-gradient(circle at 30% 20%, #14253f 0%, var(--blue-900) 55%, #070b13 100%);
+      display: flex;
+      justify-content: center;
+    }
+
+    canvas {
+      display: block;
+    }
+
+    .login-overlay {
+      position: fixed;
+      inset: 0;
+      z-index: 35;
+      background: rgba(11, 15, 26, 0.34);
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      backdrop-filter: blur(2px);
+    }
+
+    .login-card {
+      width: 320px;
+      max-width: 92vw;
+      margin: 0;
+      background: linear-gradient(180deg, rgba(36, 52, 84, 0.92), rgba(27, 42, 65, 0.95));
+      border: 2px solid rgba(144, 224, 239, 0.35);
+      border-radius: 18px;
+      padding: 22px 20px;
+      color: var(--blue-100);
+      font-family: "Trebuchet MS", "Segoe UI", sans-serif;
+      text-align: left;
+      box-shadow: 0 18px 60px rgba(0, 0, 0, 0.45);
+    }
+
+    .login-card h2 {
+      margin: 0 0 8px;
+      font-size: 28px;
+      letter-spacing: 0.4px;
+      color: #f2fbff;
+      text-align: center;
+    }
+
+    .login-card p {
+      margin: 0;
+    }
+
+    .login-subtitle {
+      margin-bottom: 14px;
+      color: var(--blue-300);
+      font-size: 13px;
+      text-align: center;
+    }
+
+    .login-label {
+      display: block;
+      font-size: 12px;
+      margin-bottom: 6px;
+      color: #d7f3ff;
+    }
+
+    .login-input {
+      width: 100%;
+      box-sizing: border-box;
+      padding: 10px 12px;
+      border-radius: 999px;
+      border: 1px solid rgba(144, 224, 239, 0.35);
+      background: rgba(202, 233, 255, 0.95);
+      color: #1b2a41;
+      margin-bottom: 12px;
+      outline: none;
+      font-size: 13px;
+    }
+
+    .login-input:focus {
+      border-color: var(--blue-500);
+      box-shadow: 0 0 0 2px rgba(0, 180, 216, 0.28);
+    }
+
+    .login-submit {
+      width: 100%;
+      padding: 10px;
+      border: none;
+      border-radius: 999px;
+      background: linear-gradient(90deg, #1386c6, var(--blue-500));
+      color: #effcff;
+      font-weight: bold;
+      letter-spacing: 0.3px;
+      cursor: pointer;
+    }
+
+    .login-error {
+      min-height: 18px;
+      color: #ffd3d3;
+      font-size: 12px;
+      margin: 10px 0 0;
+      text-align: center;
+    }
+
+    .login-demo {
+      margin-top: 12px;
+      color: #b6e8fb;
+      font-size: 11px;
+      line-height: 1.45;
+      text-align: center;
+      opacity: 0.95;
+    }
+  </style>
+</head>
+<body>
+
+  <button id="pauseBtn" style="
+    position:fixed; top:14px; left:14px; z-index:40;
+    background:rgba(20,20,20,0.85); color:white;
+    border:1px solid rgba(255,255,255,0.35); border-radius:8px;
+    padding:8px 12px; font-weight:bold; cursor:pointer;">
+    Pause
+  </button>
+
+  <div id="loginOverlay" class="login-overlay">
+    <div class="login-card">
+      <h2>DashSign</h2>
+      <label for="loginName" class="login-label">Username</label>
+      <input id="loginName" class="login-input" type="text" autocomplete="username" />
+      <label for="loginPassword" class="login-label">Password</label>
+      <input id="loginPassword" class="login-input" type="password" autocomplete="current-password" />
+      <button id="loginSubmit" class="login-submit">Login</button>
+      <p id="loginError" class="login-error"></p>
+      <p class="login-demo">Demo login: Chloe<br/>Demo password: Uncharted</p>
+    </div>
+  </div>
+
+  <!-- Main game canvas -->
+  <canvas id="gameCanvas" width="480" height="720"></canvas>
+
+  <!-- Webcam input (hidden — MediaPipe reads this) -->
+  <video id="webcam" autoplay playsinline
+    style="display:none; position:fixed; bottom:16px; right:16px;
+           width:160px; height:120px; border-radius:8px; z-index:20;">
+  </video>
+
+  <!-- Webcam preview shown to player during sign-it mode -->
+  <canvas id="handCanvas"
+    style="display:none; position:fixed; bottom:16px; right:16px;
+           width:160px; height:120px; border-radius:8px; z-index:21;
+           border:2px solid white;">
+  </canvas>
+
+  <!-- Popup overlay — handles both choice mode and sign-it mode -->
+  <div id="popup" style="
+    display:none; position:fixed; top:50%; left:50%;
+    transform:translate(-50%,-50%);
+    background:rgba(0,0,0,0.92); border-radius:16px;
+    padding:24px; text-align:center; width:340px; z-index:10;">
+
+    <!-- Multiple choice mode -->
+    <div id="choiceMode">
+      <p id="choicePrompt" style="color:white; font-size:18px;
+         font-family:sans-serif; margin:0 0 16px;"></p>
+      <div style="display:flex; gap:12px; justify-content:center;">
+        <div style="text-align:center;">
+          <img id="signA" src="" style="width:90px; height:90px;
+               border-radius:8px; object-fit:cover;">
+          <p style="color:#f5c842; font-size:20px; font-weight:bold;
+             font-family:sans-serif; margin:6px 0 0;">S</p>
+        </div>
+        <div style="text-align:center;">
+          <img id="signB" src="" style="width:90px; height:90px;
+               border-radius:8px; object-fit:cover;">
+          <p style="color:#f5c842; font-size:20px; font-weight:bold;
+             font-family:sans-serif; margin:6px 0 0;">G</p>
+        </div>
+        <div style="text-align:center;">
+          <img id="signC" src="" style="width:90px; height:90px;
+               border-radius:8px; object-fit:cover;">
+          <p style="color:#f5c842; font-size:20px; font-weight:bold;
+             font-family:sans-serif; margin:6px 0 0;">P</p>
+        </div>
+      </div>
+      <p id="choiceFeedback" style="color:#ff6b6b; font-size:14px;
+         font-family:sans-serif; margin:12px 0 0; min-height:20px;"></p>
+    </div>
+
+    <!-- Sign-it mode -->
+    <div id="signItMode" style="display:none;">
+      <p id="signItPrompt" style="color:white; font-size:18px;
+         font-family:sans-serif; margin:0 0 12px;"></p>
+      <img id="signItImage" src="" style="width:160px; height:130px;
+           border-radius:8px; object-fit:cover; margin-bottom:12px;">
+      <p style="color:#aaa; font-size:13px; font-family:sans-serif;
+         margin:0 0 8px;">Show your hand to the camera</p>
+      <div id="signResult" style="font-size:14px; font-family:sans-serif;
+           color:#f5c842; min-height:20px;"></div>
+    </div>
+
+  </div>
+
+  <!-- MediaPipe scripts must load before game.js -->
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
+
+  <!-- Your game logic -->
+  <script src="game.js"></script>
+
+</body>
+</html>
